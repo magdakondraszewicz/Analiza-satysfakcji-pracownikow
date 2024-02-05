@@ -1,0 +1,976 @@
+---
+title: "Analiza satysfakcji pracowników"
+lang: pl
+author: "Magdalena Kondraszewicz"
+date: "01-01-2024"
+format: 
+  html:
+    echo: true
+    message: false
+    warning: false
+    self-contained: true
+    theme: paper
+    toc: true
+    toc-depth: 2
+    toc-title: "Spis treści"
+    code-fold: true
+    code-summary: "Pokaż kod"
+editor: visual
+---
+
+## Cele badawcze i opis projektu
+
+Projekt powstał w celu analizy satysfakcji pracowników danej firmy. Chciałyśmy znaleźć czynniki, które najbardziej wpływają na zadowolenie z wykonywanej pracy, czy też od czego zależy awans danego pracownika. Naszym obiektem badań było również przyjrzenie się danym z perspektywy różnic pomiędzy pracownikami poszczególnych działów oraz zarabiającymi różne wynagrodzenia.
+
+W tym celu opracowałyśmy następujące modele:
+
+1.  Modele klasyfikujące, przewidujące awans danego pracownika
+2.  Model analizy dyskryminacyjnej
+3.  Drzewo decyzyjne, przewidujące satysfakcję pracownika
+4.  Las losowy, przewidujący satysfakcję pracownika
+5.  Model analizy skupień
+
+## Przedstawienie danych
+
+### Omówienie poszczególnych zmiennych
+
+```{r}
+dane <- read.csv("Employee-Attrition.csv")
+```
+
+```{r}
+#| label: tbl-1
+#| tbl-cap: "Przedstawienie zbioru danych"
+
+library(gt)
+Cecha<- c("Emp.ID","satisfaction_level","last_evaluation","number_project",       
+ "average_montly_hours",  "time_spend_company",    "Work_accident" ,        "promotion_last_5years", "dept" ,"salary" )
+Opis <- c("Przypisany numer ID poszczególnego pracownika","Poziom zadowolenia pracownika z pracą, wyrażony jako liczba z zakresu od 0 do 1 wyższa wartość oznacza wyższy poziom zadowolenia",
+          "Ocena ostatniej oceny pracowniczej, również wyrażona jako liczba z zakresu od 0 do 1", "Liczba projektów, w których pracownik brał udział","Średnia liczba godzin przepracowanych przez pracownika w miesiącu", "Liczba lat spędzonych w firmie przez pracownika", " Informacja binarna (0 lub 1) o tym, czy pracownik doświadczył wypadku przy pracy","Informacja binarna (0 lub 1) o tym, czy pracownik otrzymał awans w ciągu ostatnich 5 lat" ,"Dział, do którego przynależy pracownik", "Poziom wynagrodzenia pracownika, zmienna kategoryczna")
+df<-data.frame(Cecha=Cecha, Opis=Opis)
+gt::gt(df)  %>% tab_style(style = cell_text(weight = "bold"), locations = cells_column_labels(columns=c("Cecha", "Opis")))
+```
+
+```{r}
+#| label: tbl-66
+#| tbl-cap: "Struktura danych"
+w<-nrow(dane)
+k<-ncol(dane)
+data.frame(Wiersze=w, Kolumny=k) %>% gt::gt()
+```
+
+W badanym zbiorze danych mamy 10 kolumn, z czego 9 z nich to cechy opisujące danego pracownika, rozróżnialnego przez pierwszą kolumnę `Emp.ID` oraz 15787 obserwacji.
+
+### Przykładowe wartości zmiennych
+
+W @tbl-2 możemy zobaczyć przykładowe wartości zmiennych badanego zbioru.
+
+```{r}
+#| label: tbl-2
+#| tbl-cap: "Przykładowe wartości zmiennych"
+
+library(kableExtra)
+dane[1:100,] %>% kbl(booktabs = T) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), font_size = 13, full_width = F, fixed_thead = T)  %>%
+   scroll_box( height = "500px", width = "800px") 
+```
+
+## Przygotowanie danych pod analizę
+
+### Czyszczenie z braków danych
+
+Na początku chciałyśmy zobaczyć czy nasze dane posiadają braki danych i jeśli tak to czy ich liczba jest znacząca.
+
+```{r}
+library(tidyverse)
+ile <- sum(is.na(dane$Emp.ID))
+dane_niebrakujace_ID <- subset(dane, !is.na(Emp.ID))
+sum <- sum(is.na(dane_niebrakujace_ID))
+```
+
+Okazało się, że 788 wierszy w całości jest pustych. Nie wnoszą one żadnych informacji do naszej analizy. Zatem zostają one usunięte.
+
+```{r}
+dane <- na.omit(dane)
+```
+
+## Napotkane problemy w danych
+
+Początkowo, chciałyśmy poprzeć naszą analizę modelem liniowym czy też testem MANOVA, jednak po uprzednim sprawdzeniem założeń takich jak: zależność liniowa zmiennych i normalność rozkładu, zauważyłyśmy, że nasz zbiór zdecydowanie nie spełnia potrzebnych wymagań i nie możemy przeprowadzić wymienionych metod.
+
+### Zależności liniowe
+
+```{r}
+#| label: tbl-3
+#| tbl-cap: "Macierz korelacji"
+dane1 <- dane[,c(2,3,4,5,6)]
+cor<-cor(dane1) %>% as.data.frame() %>% kableExtra::kbl(booktabs = T)
+cor
+```
+
+```{r}
+#| label: fig-1
+#| fig-cap: "Macierz korelacji"
+
+macierz_korelacji <- cor(dane1)
+
+
+ggcorrplot::ggcorrplot(macierz_korelacji,)
+```
+
+```{r}
+sr<-mean(cor(dane1)) 
+data.frame(średnia_korelacja=sr) %>% gt::gt()
+```
+
+Jak widać zmienne numeryczne nie posiadają istotnych współczynników korelacji. Najwyższa wartość występuje między zmiennymi `number_project` i `average_montly_hours`, wynosi ona w przybliżeniu zaledwie 0.42, natomiast średnia wartość wszystkich zmiennych wynosi tylko około 0.31.
+
+```{r}
+#| label: fig-2
+#| fig-cap: "Zależności liniowe"
+library(GGally)
+ggpairs(dane1)
+```
+
+Również na wykresie @fig-2 możemy zauważyć totalny brak zależności liniowych między zmiennymi.
+
+### Rozkład normalny
+
+Na @fig-gestosc widać, że zmienne nie posiadają rozkładu normalnego, ani nie są do niego nawet zbliżone.
+
+```{r}
+#| label: fig-gestosc
+#| fig-cap: "Krzywe gęstości"
+ggplot(data = reshape2::melt(dane1), aes(x = value, fill = variable)) +
+  geom_density(alpha = 0.5) +
+  facet_wrap(~ variable, scales = "free") +
+  labs(title = "Krzywe gęstości dla zmiennych numerycznych",
+       x = "Wartość", y = "Gęstość") +
+  theme_minimal()
+```
+
+W celu potwierdzenia normalności rozkładów, przeprowadziłyśmy trzy testy: test Shapiro-Wilk'a, test Andersona-Darling'a oraz test Kolmogorv'a-Smirnov'a. We wszystkich tych testach, dla wszystkich zmiennych wyszła wartość $p-value<0.05$, zatem założenie o normalności rozkładu badanych cech nie jest spełnione.
+
+```{r}
+#| label: tbl-3444
+#| tbl-cap: "Rozkład normalny"
+library(rstatix)
+library(ggplot2)
+library(ggpubr)
+library(plotly)
+library(stats)
+library(nortest)
+dane2<- dane[,c(2, 3, 4, 5, 6)]
+dane2<-dane2[1:5000,]
+ad<-apply(dane2, 2,ad.test)
+s<-apply(dane2, 2,shapiro.test)
+l<-apply(dane2, 2,lillie.test)
+add<- c(ad$satisfaction_level$p.value, ad$last_evaluation$p.value,
+        ad$number_project$p.value, ad$average_montly_hours$p.value, ad$time_spend_company$p.value)
+
+ss<- c(s$satisfaction_level$p.value, s$last_evaluation$p.value,
+        s$number_project$p.value, s$average_montly_hours$p.value, s$time_spend_company$p.value)
+
+ll<-c(l$satisfaction_level$p.value, l$last_evaluation$p.value,
+        l$number_project$p.value, l$average_montly_hours$p.value, l$time_spend_company$p.value)
+
+dfr<-data.frame(Anderson_Darling=add, Shapiro_Wilk=ss, Kolmogorov_Smirnov=ll )
+rownames(dfr) <- c("satisfaction_level","last_evaluation","number_project",
+                   "average_montly_hours","time_spend_company")
+dfr %>%  kableExtra::kbl(booktabs = T, digits = 1000) %>% kableExtra::add_header_above(c("P-value"=4))
+```
+
+## Wizualizacja
+
+#### Liczebność działów
+
+```{r}
+#| label: fig-11
+#| fig-cap: "Liczba pracowników w poszczególnych działach"
+
+ws <-ggplot(dane, aes(x=as.factor(dept), 
+                 fill=as.factor(dept))) +geom_bar() +
+  scale_fill_manual(values = c(
+
+"#FFE6E8",
+"#FFD6D6",
+"#FFC2C2",
+"#FFADAD",
+"#FF9999",
+"#FF8484",
+"#FF7070",
+"#FF5C5C",
+"#FF4747",
+"#FF3333") ) + 
+  theme(legend.position="none") + xlab("Działy") + ylab("Liczba pracowników") +
+  scale_x_discrete(guide = guide_axis(angle = 40)) 
+
+ggplotly(ws)
+```
+
+Z @fig-11 wynika, że:
+
+-   S*ales* jest najliczniejszym działem w naszym zbiorze, liczy aż 4140 pracowników.
+
+-   Widzimy duże zróżnicowanie liczebności pracowników w działach
+
+#### Liczebność wypadków w poszczególnych działach
+
+```{r}
+#| label: fig-wypadki
+#| fig-cap: "Liczba wypadków"
+
+library(dplyr)
+library(plotly)
+
+wypadki_w_dzialach <- dane %>%
+  group_by(dept) %>%
+  summarise(Work_accident = sum(Work_accident))
+
+wykres <- ggplot(wypadki_w_dzialach, aes(x = dept, y = Work_accident)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Liczba wypadków w poszczególnych działach", x = "Dział", y = "Liczba wypadków") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(wykres)
+```
+
+Na wykresie @fig-wypadki możemy zaobserwować ile nastąpiło wypadków w poszczególnych działach w firmie, najwięcej bo aż 587 było w departamencie *sales*. Wynika to z faktu, iż w tym dziale pracuje najwięcej osób. Zachowuje się dokładnie taka sama tendencja co w liczebności działów, oznacza to że żaden z działów nie jest bardziej narażony na wypadki.
+
+#### Rozkłady ocen i satysfakcji z podziałem na zarobki
+
+```{r}
+#| label: fig-5
+#| fig-cap: "Oceny pracowników"
+wykres_rozkładu <- ggplot(dane, aes(x = last_evaluation, fill = salary)) +
+  geom_density(alpha = 0.5) +  
+  labs(title = "Rozkład ocen pracowników z podziałem na zarobki", x = "Ocena pracownika") +
+  scale_fill_manual(values = c("low" = "lightblue", "medium" = "lightgreen", "high" = "lightpink"))
+
+print(wykres_rozkładu)
+```
+
+Na @fig-5 widzimy jak rozkładają się oceny pracowników w podziale na zarobki. Gęstość rozkładu zarabiających "*nisko*" oraz "*średnio"* formuje się bardzo podobnie, najwięcej ocen mieści się w granicach od 0.4 do 0.6 oraz od 0.8 do 1.0, natomiast zarabiający"*wysoko*" przeważają w zakresie od 0.6 do 0.8.
+
+```{r}
+#| label: fig-6
+#| fig-cap: "Satysfakcja pracowników"
+
+wykres_rozkładu <- ggplot(dane, aes(x =satisfaction_level, fill = salary)) +
+  geom_density(alpha = 0.5) +  
+  labs(title = "Rozkład satysfakcji pracowników z podziałem na zarobki", x = "Satysfakcja pracownika") +
+  scale_fill_manual(values = c("low" = "lightblue", "medium" = "lightgreen", "high" = "lightpink"))
+
+print(wykres_rozkładu)
+```
+
+Jeśli chodzi o satysfakcję pracowników, w zależności od zarobków to rozkłady również formują się w zbliżony do siebie kształt. Widzimy jednak, że przeważnie pracownicy są usatysfakcjonowani z wykonywanej pracy ponieważ najwięcej wartości zawiera się w granicach od 0.5 do 1.0.
+
+#### Histogramy satysfakcji i ocen pracowników w podziale na zarobki
+
+```{r}
+#| label: fig-7
+#| fig-cap: "Satysfakcja a wypadki"
+
+dane$Work_accident <- as.factor(dane$Work_accident)
+wykres_histogramu <- ggplot(dane, aes(x = satisfaction_level, fill = Work_accident)) +
+  geom_histogram(alpha = 0.5, position = "identity", bins = 30) +
+  labs(title = "Rozkład satysfakcji pracowników z podziałem na wypadki przy pracy", x = "Ocena pracownika") +
+  facet_wrap(~Work_accident, scales = "free_y") +
+  scale_fill_manual(values = c("0" = "lightblue", "1" = "lightgreen"))
+
+print(wykres_histogramu)
+```
+
+```{r}
+#| label: fig-8
+#| fig-cap: "Ocena pracownika a wypadki"
+wykres_histogramu <- ggplot(dane, aes(x = last_evaluation, fill = Work_accident)) +
+  geom_histogram(alpha = 0.5, position = "identity", bins = 30) +
+  labs(title = "Histogram ocen pracowników z podziałem na wypadki przy pracy", x = "Ocena pracownika") +
+  facet_wrap(~Work_accident, scales = "free_y") +
+  scale_fill_manual(values = c("0" = "lightblue", "1" = "lightgreen"))
+
+print(wykres_histogramu)
+```
+
+-   W podziale na pracowników, którzy doświadczyli wypadku w pracy a tych, którzy nie, ich histogramy satysfakcji - @fig-7 oraz oceny od pracodawcy - @fig-8 nie różnią się znacząco.
+
+#### Wysokość zarobków
+
+```{r}
+#| label: fig-9
+#| fig-cap: "Zarobki"
+
+
+library(tidyverse)
+wyk<- ggplot(dane, aes(x=as.factor(salary), 
+                 fill=as.factor(salary))) +geom_bar() +
+  scale_fill_manual(values = c("#bf94e4", "#40e0d0", "#fb607f") ) +
+  theme(legend.position="none") + xlab("Wysokość zarobków") + ylab("Liczba pracowników")
+ggplotly(wyk)
+```
+
+Na @fig-9 , możemy zaobserwować, że w badanej firmie jest znacząca różnica między liczbą pracowników w podziale na zarobki. Najwięcej osób - 7316, otrzymuje "*niskie*", na drugim miejscu "*średnie*" - 6446 wynagrodzenie, natomiast znacząco mniej osób - 1237, otrzymuje "*wysokie*" zarobki.
+
+W podziale na działy - @fig-10
+
+```{r}
+#| label: fig-10
+#| fig-cap: "Zarobki w działach"
+
+  ggplot(dane,aes(x=as.factor(salary), 
+                 fill=as.factor(salary))) +geom_bar() +
+  scale_fill_manual(values = c("#bf94e4", "#40e0d0", "#fb607f") ) +
+    theme_minimal() +
+  theme(legend.position="none") + facet_wrap(~dept) + xlab("Wysokość zarobków") + ylab("Liczba")
+```
+
+Działy, które odbiegają od trendu:
+
+-   W działach `accounting`, `hr`, `IT`, `marketing`, `product_mng`, `RandD` różnice w ilości pracowników zarabiających "*średnie"* i "*wysokie*" zarobki, nie są aż tak zróżnicowane
+
+-   W dziale `managment` liczba pracowników dla "*wysokich*", "*średnich*" i "*niskich*" zarobków jest bardzo zbliżona
+
+## Podstawowe statystyki
+
+### Podstawowe statystyki opisowe dla każdej zmiennej
+
+```{r}
+#| label: tbl-p
+#| tbl-cap: "Podstawowe statystyki"
+dane %>%
+  get_summary_stats(show = c("n", "mean", "min", "max", "median", "sd", "se")) %>%
+  kbl(caption = "Dane statystyczne", col.names = c("Zmienna", "n", "Średnia", "Min", "Max", "Mediana", "Odchylenie standardowe", "Błąd standardowy"),escape = F) %>%
+  kable_minimal()
+```
+
+Wartości w poniższych tabelach: @tbl-pp oraz @tbl-pppp są zaznaczone tak, że im ciemniejszy kolor ma komórka w danej kolumnie tym wartość jest wyższa.
+
+### Z podziałem na departamenty:
+
+```{r}
+#| label: tbl-pp
+#| tbl-cap: "Podstawowe statystyki w departamentach"
+
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(formattable)
+library(data.table)
+library(flextable)
+library(ftExtra)
+library(gt)
+dane %>% group_by(dept) %>% 
+  mutate(n=n()) %>% 
+  group_by(dept, n) %>% 
+  summarise_at(vars(average_montly_hours,time_spend_company, number_project, satisfaction_level),
+               list(~mean(.)))  %>% gt()  %>% 
+  data_color(method="numeric", palette = c("lightblue", "blue", "darkblue")) %>% 
+  cols_label(n="Liczba pracowników",
+             average_montly_hours="Średnia miesięczna liczba godzin",
+           time_spend_company="Średni czas w latach w firmie",
+           number_project="Średnia liczba projektów",
+           satisfaction_level="Średni poziom satysfakcji") %>% 
+  tab_spanner(label = "Średnia arytmetyczna", columns = 3:6)
+```
+
+-   Możemy zauważyć, że średnio najwięcej godzin miesięcznie w pracy spędzają pracownicy z działu `technical` oraz `IT`.
+
+-   Najdłuższy średni staż pracy, wyróżniający się na tle innych, posiadają pracownicy z działu `management`. Również ci pracownicy wykazują najwyższy średni poziom satysfakcji z pracy.
+
+-   Średnio najwięcej projektów powstaje w dziale `technical`.
+
+### Z podziałem na wysokość zarobków:
+
+```{r}
+#| label: tbl-pppp
+#| tbl-cap: "Podstawowe statystyki z podziałem na zarobki"
+dane %>% group_by(salary) %>% 
+  mutate(n=n()) %>% 
+  group_by(salary, n) %>% 
+  summarise_at(vars(average_montly_hours,time_spend_company, number_project, satisfaction_level),
+               list(~mean(.))) %>% gt() %>% 
+  cols_label(n="Liczba pracowników",
+             average_montly_hours="Średnia miesięczna liczba godzin",
+           time_spend_company="Średni czas w latach w firmie",
+           number_project="Średnia liczba projektów",
+           satisfaction_level="Średni poziom satysfakcji") %>% 
+  tab_spanner(label = "Średnia arytmetyczna", columns = 3:6)  %>% 
+  data_color(method="numeric", palette = c("lightblue", "blue", "darkblue"))
+```
+
+-   Pracownicy zarabiający *wysoko* spędzili średnio najwięcej lat w firmie, wykazują najwyższy średni poziom satysfakcji z pracy oraz wykonują średnio najmniej projektów.
+
+-   Pracownicy zarabiający *nisko* (największy odsetek) wykazują najniższy średni poziom satysfakcji z pracy, również to u nich występuje najniższa średnia wartość jeśli chodzi o średni czas w latach w firmie.
+
+-   Pracownicy zarabiający *średnio* spędzają średnio najwięcej godzin miesięcznie w firmie oraz wykonują najwięcej projektów.
+
+## Model klasyfikujący przewidujący awans
+
+Tworzymy dwa modele, drzewo decyzyjne oraz model regresji logistycznej.
+
+Na początku, wybieramy cechy, na których podstawie model będzie klasyfikował danego pracownika do grupy, która dostanie awans, czy też do grupy, która tego awansu nie dostanie. Pomijamy zmienne nie wnoszące nic do modelu takie jak np `Emp.ID`.
+
+```{r}
+df <- dane[c(2, 3, 4, 5, 6, 7, 8)]
+
+```
+
+Istotną kwestią jest sprawdzenie czy mamy do czynienia z zadaniem zbalansowanym, możemy to sprawdzić za pomocą zliczenia obserwacji i metod graficznych.
+
+Zamieniamy też zmienną wynikową na faktor żeby było łatwiej na niej dalej działać.
+
+```{r}
+library(haven)
+dane$promotion_last_5years <- as_factor(df$promotion_last_5years)
+```
+
+```{r}
+plyr::count(df, 'promotion_last_5years') %>% as.data.frame() %>% gt::gt()
+```
+
+Dzieląc kolumnę `promotion_last_5years`, mówiącą o awansie pracownika i zliczając ile z nich dostało awans (1) , a ile nie (0), widzimy, że istnieje znacząca różnica w liczebności tych podzbiorów.
+
+To samo potwierdza nam wykres:
+
+```{r}
+#| label: fig-awanse
+#| fig-cap: "Rozkład awansów"
+
+ggplot(df,aes(x = promotion_last_5years)) +
+  geom_bar(fill="blue")+
+  xlab("promotion_last_5years")
+```
+
+Zatem układ nie jest zbalansowany, aby to naprawić weźmiemy próbkę z naszej próby osób, które dostały awans.
+
+```{r}
+#| label: fig-awans
+#| fig-cap: "Rozkład awansów, zbalansowany"
+
+library(dplyr)
+library(ggplot2)
+set.seed(123)
+df <- df %>%
+  group_by(promotion_last_5years) %>%
+  sample_n(319)
+ggplot(df,aes(x = promotion_last_5years)) +
+  geom_bar(fill="blue")+
+  xlab("promotion_last_5years")
+
+```
+
+### Podział zbioru
+
+Po tym jak już zbalansowaliśmy nasz zbiór możemy przejść do procesu modelowania. Pierwszym etapem jest podział zbioru na uczący i testowy. Ustawiamy ziarno "123".
+
+```{r}
+library(rsample)
+set.seed(123)
+split <- initial_split(df,0.7) 
+df_test <- testing(split) 
+df_train <- training(split)
+```
+
+```{r}
+rr<-nrow(df_test)
+rr5<-nrow(df_train)
+data.frame(Wiersze_test=rr, Wiersze_train=rr5) %>% gt::gt()
+```
+
+Nasz zbiór pierwotny dzielimy w stosunku 70:30, zatem w zbiorze treningowym znajdzie się 11050 obserwacji, natomiast w testowym 4737.
+
+### Zdefiniowanie modeli
+
+Następnie definiujemy modele.
+
+Modele definiujemy za pomocą odpowiadającej mu funkcji podając: rodzaj zadania oraz silnik modelu. W naszym przypadku definiujemy model drzewa decyzyjnego oraz regresji logistycznej.
+
+```{r}
+library(parsnip)
+#Model drzewa decyzyjnego
+tree_mod <- decision_tree(mode = "classification",
+                          engine = "rpart")
+
+#Model regresji logistycznej
+logreg_mod <- logistic_reg(mode = "classification",
+                         engine = "glm")
+```
+
+### Tworzenie przepływu pracy
+
+Można to porównać do tworzenia 'pojemnika' w którym będziemy trzymali nasz model i dodawali mu niezbędne rzeczy np. formułę oraz prowadzili na nim wszystkie dalsze operacje np. uczenie.
+
+```{r}
+library(workflows)
+tree_wf <- workflow() %>% 
+  add_model(tree_mod) %>% 
+  add_formula(promotion_last_5years~.) 
+```
+
+Regresja logistyczna wymaga normalizacji predyktorów
+
+```{r}
+library(recipes)
+reg_rec <- recipe(promotion_last_5years~., data = df_train) %>% 
+  step_normalize() 
+```
+
+```{r}
+reg_wf <- workflow() %>% 
+  add_model(logreg_mod) %>% 
+  add_recipe(reg_rec) 
+
+
+```
+
+### Uczenie modelu
+
+```{r}
+df_train$promotion_last_5years <- as.factor(df_train$promotion_last_5years)
+df_test$promotion_last_5years <- as.factor(df_test$promotion_last_5years)
+tree_wf_fit <- tree_wf %>% 
+  fit(data = df_train)
+
+reg_wf_fit <- reg_wf %>% 
+  fit(data = df_train)
+```
+
+### Predykcja i testowanie
+
+```{r}
+tree_pred <- predict(tree_wf_fit,df_test)
+
+
+reg_pred <- predict(reg_wf_fit,df_test) 
+
+```
+
+Łączymy predykcje modelu i wartość rzeczywistą ze zbioru testowego w jedną ramkę aby móc je porównać ze sobą i ocenić jakość modelu.
+
+```{r}
+tree_df <- bind_cols(tree_pred, 'target' = df_test$promotion_last_5years)
+reg_df <- bind_cols(reg_pred, 'target' = df_test$promotion_last_5years)
+```
+
+Dobrym podsumowaniem jakości modeli klasyfikacyjnych jest '*Confusion Matrix'* czyli macierz pomyłek
+
+```{r}
+library(yardstick)
+conf_tree <- conf_mat(tree_df, truth = "target", estimate = ".pred_class")
+conf_reg <- conf_mat(reg_df, truth = "target", estimate = ".pred_class")
+```
+
+```{r}
+#| label: fig-drzewo
+#| fig-cap: "Macierz pomyłek modelu drzewa decyzyjnego"
+autoplot(conf_tree, type = "heatmap")
+
+```
+
+```{r}
+#| label: fig-reg
+#| fig-cap: "Macierz pomyłek modelu regresji logistycznej"
+autoplot(conf_reg, type = "heatmap")
+```
+
+### Trafność, czułość i swoistość
+
+```{r}
+#| label: tbl-miary
+#| tbl-cap: "Miary dopasowania modelu"
+
+ac<-accuracy(tree_df, truth = "target", estimate = ".pred_class")
+sens<- sens(tree_df, truth = "target", estimate = ".pred_class")
+
+ac2<-accuracy(reg_df, truth = "target", estimate = ".pred_class")
+sens2<- sens(reg_df, truth = "target", estimate = ".pred_class")
+
+spect <- yardstick::specificity(tree_df, truth = "target", 
+                                estimate = ".pred_class")#swoistość
+specr <- yardstick::specificity(reg_df, truth = "target",
+                                estimate = ".pred_class")#swoistość
+
+data.frame(accuracy_tree=ac$.estimate, sensitivity_tree=sens$.estimate,
+           specifity_tree=spect$.estimate,
+           accuracy_reg=ac2$.estimate, sensitivity_reg=sens2$.estimate,
+           specifity_reg=specr$.estimate) %>% gt::gt()
+
+```
+
+**Trafność -** accuracy, jest to odsetek poprawnie zaklasyfikowanych przypadków w modelu. Drzewo decyzyjne ma większą wartość tego kryterium ponieważ wynosi ono około $68\%$, natomiast dla modelu regresji liniowej około $66\%$. Są to niewielkie różnice.
+
+**Czułość** - sensitivity, jest to zdolność testu do wykrycia danej cechy, w naszym przypadku poztywnej odpowiedzi na to czy pracownik dostanie awans. Lepiej na tle tej cechy wypada model regresji logistycznej.
+
+**Swoistość** - specifity, jest to zdolność do wykrycia braku danej cechy, czyli nie dostania awansu. Tutaj o wiele lepiej poradził sobie model drzewa decyzyjnego.
+
+Na podstawie wyżej wymienionych miar nie możemy jednoznacznie powiedzieć, który model lepiej klasyfikuje. Awans lepiej wykrywa model regresji, jego brak - drzewo decyzyjne.
+
+## Analiza dyskryminacyjna
+
+Na samym początku, przygotowujemy nasz zbiór pod analizę, w tym celu zamieniamy wartości zmiennej binarnej `satisfaction_level` na zmienną kategoryczną, w której "*nie*" oznacza, że dany pracownik nie jest usatysfakcjonowany ze swojej pracy, natomiast "*tak*", że jest.
+
+```{r}
+#| label: tbl-pogladowe
+#| tbl-cap: "Poglądowe wartości zmiennych"
+dane1 <- dane %>% 
+  mutate(satisfaction_level=ifelse(satisfaction_level>0.65, "tak", "nie"))
+head(dane1) %>% as.data.frame() %>% gt::gt()
+```
+
+```{r}
+library(tidyverse)
+library(MASS)
+library(candisc)
+
+```
+
+Następnie dzielimy nasz zbiór na treningowy i testowy w stosunku 70:30 i standaryzujemy zmienne.
+
+```{r}
+index <- sample(1:nrow(dane1), 0.7 * nrow(dane1))  # 70% danych treningowych
+train <- dane1[index, ]
+test <- dane1[-index, ]
+
+test <- test %>% mutate_if(is.numeric, scale) %>% as.data.frame()
+train <- train %>% mutate_if(is.numeric, scale) %>% as.data.frame()
+
+```
+
+```{r}
+
+model <- lda(satisfaction_level~last_evaluation+average_montly_hours+
+               number_project+time_spend_company, train)
+model
+```
+
+Z wyników analizy wnioskujemy, iż stan zmiennej wyrażającej satysfakcję "*nie*" - występowało w $52\%$ przypadków, natomiast "*tak*" - w $48\%$, zatem większość pracowników w naszym zbiorze treningowym jest zadowolona ze swojej pracy. Przy klasyfikacji największą moc determinacyjną ma zmienna `last_evaluation` , mówiąca o ostatniej ocenie danej pracownikowi i to ona ma największy wpływ na satysfakcję danej osoby.
+
+```{r}
+
+pred <- predict(model, newdata=test)
+tabela <- table(pred=pred$class, obs=test$satisfaction_level)
+#tabela %>% as.data.frame()
+prop<-prop.table(tabela)
+
+```
+
+```{r}
+heatmap_df <- as.data.frame(prop)
+
+ggplot(heatmap_df, aes(x = obs, y = pred, fill = Freq)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", Freq)), vjust = 1.5) + # Dodaj etykiety
+  scale_fill_gradient(low = "white", high = "lightblue") +
+  labs(title = "Heatmap",
+       x = "Obserwowane",
+       y = "Przewidywane") +
+  theme_minimal()
+
+```
+
+```{r}
+data.frame('poprawnie'=sum(diag(prop))) %>% gt::gt()
+```
+
+Jeśli chodzi o to jak dobrze nasz model klasyfikuje dane przypadki to możemy zobaczyć, że podzielił on zbiór testowy poprawnie w około $58\%$ przypadków, nie jest to zbyt wysoki wynik. Jednak model klasyfikuje przypadki zadowolenia i niezadowolenia pracownika z podobną precyzją.
+
+## Drzewo decyzyjne, przewidujące satysfakcję pracownika
+
+Stworzymy drzewo decyzyjne, które pomoże w klasyfikacji zadowolonych i niezadowolonych pracowników.
+
+Zmienna `satisfaction_level` jest zmienną ciągłą, ilościową. Aby dokonać klasyfikacji na jej podstawie tworzymy nową zmienną `is_satisfaction`, która przyjmuje wartości
+
+-   1, gdy zmienna `satisfaction_level` przyjmuje wartość $> 0.65$, oznaczająca zadowolenie pracownika
+
+-   0, gdy zmienna `satisfaction_level` przyjmuje wartość $\leqslant 0.65$, oznaczająca niezadowolenie pracownika
+
+```{r}
+dane <-  na.omit(read.csv("Employee-Attrition.csv"))
+dane$is_satisfaction <-ifelse(dane$satisfaction_level > 0.65, 1,0)
+df <- subset(dane, select = -satisfaction_level)
+df$salary <- as.factor(df$salary)
+df$dept <- as.factor(df$dept)  
+df$promotion_last_5years <- as.factor(df$promotion_last_5years)  
+df$Work_accident <- as.factor(df$Work_accident)
+df$is_satisfaction <- as.factor(df$is_satisfaction)
+```
+
+Następnie, należy sprawdzić czy nasze zbiory są równoliczne.
+
+```{r}
+#| label: fig-rownolicznosc
+#| fig-cap: "Rozkład zadowolenia" 
+
+library(rsample)
+library(caret)
+set.seed(123)
+split <- initial_split(df, prop = 0.85)
+trening_df <- training(split)
+test_df <- testing(split)
+ggplot(df,aes(x = is_satisfaction)) +
+  geom_bar(fill="lightblue")+
+  xlab("is_satisfaction")
+```
+
+-   Jak widać na wykresie, możemy przyjąć że zbiory są równoliczne
+
+Przechodzimy do stworzenia, drzewa losowego i do jego wizualizacji.
+
+```{r}
+library(rpart)
+library(rattle)
+
+tree <- rpart(is_satisfaction ~., method = 'class', data=trening_df)
+```
+
+```{r}
+#| label: fig-drzewoDezyzyjne
+#| fig-cap: "Wykres drzewa decyzyjnego"
+
+fancyRpartPlot(tree)
+```
+
+Głównym punktem odniesienia w naszym modelu jest liczba projektów
+
+-   Zbyt mała (\< 2.5) liczba projektów skutkuje niezadowoleniem pracownika
+
+-   Zbyt duża (\> 5.5) liczba projektów skutkuje niezadowoleniem pracownika
+
+-   Pracownicy, którzy są lepiej oceniani przez pracodawcę są zadowoleni z pracy
+
+### Testowanie modelu
+
+Należy sprawdzić, jak dobrze nasz model przewiduje satysfakcję pracownika.
+
+Poglądowe 10 pierwszych rekordów prawdopodobieństwa, oszacowanego przez nasz model.
+
+```{r}
+library(dplyr)
+tree_pred <- predict(tree,test_df) 
+tree_df <- bind_cols(tree_pred, 'target' = test_df$is_satisfaction)
+kableExtra::kable(head(tree_df, n=10))
+```
+
+```{r}
+#| label: fig-drzewoPomyłki
+#| fig-cap: "Macierz pomyłek modelu drzewa decyzyjnego"
+
+library(yardstick)
+
+tree_df[,'predict'] <- ifelse(tree_df[, "1"] > 0.5, 1, 0)
+tree_df <- tree_df[,-c(1,2)]
+tree_df$target <- as.factor(tree_df$target)
+tree_df$predict <- as.factor(tree_df$predict)
+conf_tree <- conf_mat(tree_df, truth = "target", estimate = "predict")
+autoplot(conf_tree, type = "heatmap")
+```
+
+-   W sytuacji, gdy pracownik jest zadowolony z pracy model dobrze to przewiduje
+
+-   Model nie radzi sobie z sytuacją, gdy pracownik nie jest zadowolony z pracy. Częściej przewiduje nieprawidłową wartość
+
+-   Zaistniała sytuacja, wynika z faktu iż model w większości przypadków niezadowolenie pracownika stwierdza po zaledwie jednej decyzji ( `number_project` \< 2.5)
+
+-   Zadowolenie pracownika, jest przewidywane po trzech decyzjach, co wpływa na o wiele większą dokładność
+
+## Las losowy
+
+Sprawdzimy, czy las losowy lepiej zaklasyfikuje zmienną `is_satisfaction` i czy poradzi sobie z problemem, który wystąpił przy drzewie decyzyjnym.
+
+```{r}
+set.seed(123)
+library(randomForest)
+
+df$salary <- as.factor(df$salary)
+df$dept <- as.factor(df$dept)  
+df$promotion_last_5years <- as.factor(df$promotion_last_5years)  
+df$Work_accident <- as.factor(df$Work_accident)
+df$is_satisfaction <- as.factor(df$is_satisfaction)
+split <- initial_split(df,0.85) 
+test_data <- testing(split)
+train_data <- training(split)
+
+rf_model <- randomForest(is_satisfaction~., data = train_data, ntree = 500)
+rf_pred <- predict(rf_model, test_data)
+rf_df <- bind_cols('predict'=rf_pred, 'target' = test_data$is_satisfaction)
+
+```
+
+```{r}
+#| label: fig-drzewo2
+#| fig-cap: "Macierz pomyłek modelu lasu losowego"
+
+conf_tree <- conf_mat(rf_df, truth = "target", estimate = "predict")
+autoplot(conf_tree, type = "heatmap")
+```
+
+-   Las losowy składający się z 500 drzew decyzyjnych, wydaje się być o wiele lepszym modelem klasyfikacyjnym
+
+-   Las losowy rozwiązał po części problem z klasyfikacją, wartości odpowiadających niezadowoleniu pracowników
+
+Sprawdźmy, jednak za pomocą odpowiednich miar, który model jest lepszy
+
+## Porównanie modeli za pomocą miar
+
+```{r}
+#| label: fig-miary2
+#| fig-cap: "Miary dopasowania modelu"
+
+library(kableExtra)
+
+accuracy_tree <- yardstick::accuracy(tree_df, truth = "target", estimate = "predict")
+precision_tree <- yardstick::precision(tree_df, truth = "target", estimate = "predict")
+sensitivity_tree <- yardstick::sensitivity(tree_df, truth = "target", estimate = "predict")
+specificity_tree <- yardstick::specificity(tree_df, truth = "target", estimate = "predict")
+
+accuracy_rf <- yardstick::accuracy(rf_df, truth = "target", estimate = "predict")
+precision_rf <- yardstick::precision(rf_df, truth = "target", estimate = "predict")
+sensitivity_rf <- yardstick::sensitivity(rf_df, truth = "target", estimate = "predict")
+specificity_rf <- yardstick::specificity(rf_df, truth = "target", estimate = "predict")
+
+measures<- data.frame(
+  Model = c("Decision Tree", "Random Forest"),
+  Accuracy = c(accuracy_tree$.estimate, accuracy_rf$.estimate),
+  Precision = c(precision_tree$.estimate, precision_rf$.estimate),
+  Sensitivity = c(sensitivity_tree$.estimate, sensitivity_rf$.estimate),
+  Specificity = c(specificity_tree$.estimate, specificity_rf$.estimate)
+)
+
+kableExtra::kable(measures)
+
+```
+
+-   **Trafność** (*accuracy*): Modelu uzyskany algorytmem lasu losowego ma wyższy odsetek poprawnych klasyfikacji dokonywanych przez model
+
+-   **Precyzja** (*precission*) odpowiedź na pytanie, w jakim stopniu klasyfikacje pozytywne na podstawie modelu są poprawne, model uzyskany algorytmem drzewa dycyzyjnego lepiej sobie z tym poradził
+
+-   **Czułość/Pełność** (*recall ration*/*sensitivity*): zdolność modelu do wychwytywania przypadków pozytywnych, las losowy radzi sobie lepiej
+
+-   **Swoistość/Specyficzność** (*specificity*): zdolność modelu do wychwytywania przypadków negatywnych, drzewo decyzyjne radzi sobie lepiej
+
+Podsumowując, w naszym przypadku jako "lepszy" uznajemy model uzyskany algorytmem lasu losowego.
+
+## Analiza skupień
+
+W celu przeprowadzenia analizy skupień w podziale na działy, obliczymy średnie wartości zmiennych numerycznych. Na podstawie tych wartości dokonamy klastrowania.
+
+```{r}
+library(tidyr)
+library(tidyverse)
+library(factoextra)
+library(reshape2)
+df <- dane %>% group_by(dept)  %>%
+  summarise(mean_evaluation=mean(last_evaluation), mean_satisfaction=mean(satisfaction_level), mean_num_project=mean(number_project), mean_avr_monthly_hours=mean(average_montly_hours),mean_time_spend=mean(time_spend_company) ) 
+df <- data.frame(df)
+df <- df[,-1]
+rownames(df) <- c("accounting",	"hr",	"IT",	"management","marketing","product_mng",
+"RandD","sales","support","technical")
+```
+
+#### Macierz odległości
+
+Im mniejsza odległość, tym wyższe prawdopodobieństwo, że działy są podobne między sobą lub mają wspólne cechy.
+
+```{r}
+#| label: fig-macierz
+#| fig-cap: "Macierz odległości"
+
+d1 <- get_dist(df, stand=T)
+fviz_dist(d1)
+```
+
+#### Aglomeracja za pomocą `Agnes`
+
+```{r}
+library(cluster)
+
+mod.agnes.ward <- agnes(x=df, stand=T, method = "ward")
+mod.agnes.single <- agnes(x=df, stand=T, method = "single")
+mod.agnes.complete <- agnes(x=df, stand=T, method = "complete")
+mod.agnes.average <- agnes(x=df, stand=T, method = "average")
+
+table <- data.frame(
+  metoda = c("ward", "single", "complete", "average"),
+  ac = c(mod.agnes.ward$ac, mod.agnes.single$ac,
+         mod.agnes.complete$ac, mod.agnes.average$ac)
+)
+kableExtra::kable(table)
+```
+
+Metoda `complete` ma najwyższy współczynnik aglomeracji, dlatego też użyjemy tej metody.
+
+```{r}
+#| label: fig-Dendrogram
+#| fig-cap: "Dendrogram 1"
+
+mod.complete <- hcut(df, k=4, stand=TRUE, hc_method = "complete")
+fviz_dend(mod.complete, rect = TRUE, cex=0.5, horiz=T)
+```
+
+```{r}
+#| label: fig-Dendrogram2
+#| fig-cap: "Dendrogram 2"
+fviz_cluster(mod.complete)
+```
+
+Utworzyły się cztery następujące klastry:
+
+-   Klaster 1 : `technical`, `hr`, `accounting`, `support`, `RandD`, `sales`
+
+-   Klaster 2: `IT`
+
+-   Klaster 3: `marketing`
+
+-   klaster 4: `product_mng`, `managment`
+
+## Podsumowanie
+
+1.  **Modelowanie awansu:**
+
+    -   Zbalansowanie zbioru danych poprzez próbkowanie było istotne, aby uniknąć problemów z niezbalansowanymi klasami.
+
+    -   Zastosowanie dwóch modeli klasyfikacyjnych, tj. drzewa decyzyjnego i regresji logistycznej, umożliwiło porównanie ich skuteczności.
+
+    -   Drzewo decyzyjne miało lepszą czułość, podczas gdy regresja logistyczna miała lepszą swoistość.
+
+2.  **Analiza dyskryminacyjna:**
+
+    -   Przeprowadzono analizę dyskryminacyjną w kontekście satysfakcji pracowników.
+
+    -   Wartości zmiennej binarnej **`satisfaction_level`** zostały zamienione na zmienną kategoryczną, aby ułatwić analizę.
+
+    -   Model LDA wskazał, że ocena pracownika ma istotny wpływ na jego satysfakcję.
+
+3.  **Drzewo decyzyjne przewidujące satysfakcję pracownika:**
+
+    -   Stworzono drzewo decyzyjne do klasyfikacji zadowolonych i niezadowolonych pracowników.
+
+    -   Model ten skupił się głównie na liczbie projektów oraz ocenie pracownika.
+
+    -   Model ten wykazywał pewne ograniczenia w przewidywaniu niezadowolenia pracowników.
+
+4.  **Las losowy:**
+
+    -   Zastosowano algorytm lasu losowego, który składał się z 500 drzew decyzyjnych.
+
+    -   Model ten osiągnął lepszą skuteczność w porównaniu do pojedynczego drzewa decyzyjnego.
+
+5.  **Analiza skupień:**
+
+    -   Przeprowadzono analizę skupień w oparciu o średnie wartości zmiennych numerycznych dla poszczególnych działów.
+
+    -   Wykorzystano metodę aglomeracyjną z użyciem metody complete linkage.
+
+    -   Utworzono cztery klastry, grupujące działy o podobnych charakterystykach.
+
+6.  **Podsumowanie ogólne:**
+
+    -   Modele miały swoje mocne strony i ograniczenia, a wybór odpowiedniego modelu zależy od konkretnej sytuacji i celu analizy.
+
+    -   Analiza skupień pozwoliła na zidentyfikowanie podobieństw między działami w oparciu o średnie wartości zmiennych numerycznych.
+
+Podsumowując, przeprowadzona analiza dostarczyła istotnych informacji dotyczących awansu, satysfakcji pracowników i podziału na klastry działów w firmie.
+
+[Źródło danych](https://www.kaggle.com/datasets/redpen12/employees-satisfaction-analysis/data)
